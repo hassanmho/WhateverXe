@@ -1,0 +1,59 @@
+name: Build patched WhateverXe (0.8.2 + ADL-P eDP hand-off fixes)
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: b00t0x/WhateverXe
+          ref: '0.8.2'
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: acidanthera/MacKernelSDK
+          ref: 05094e5e88cec7caedbfb35e8449ed0db94bf95b
+          path: MacKernelSDK
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: acidanthera/Lilu
+          ref: 1.7.2
+          path: build/dependencies/Lilu
+          persist-credentials: false
+      - name: Prepare Lilu development files
+        run: |
+          mkdir -p Lilu.kext/Contents/Resources
+          ln -s "$GITHUB_WORKSPACE/build/dependencies/Lilu/Lilu/Headers" Lilu.kext/Contents/Resources/Headers
+          ln -s "$GITHUB_WORKSPACE/build/dependencies/Lilu/Lilu/Library" Lilu.kext/Contents/Resources/Library
+      - name: Apply fixes
+        run: |
+          git config user.email ci@example.invalid
+          git config user.name ci
+          git fetch https://github.com/renedis/WhateverXe.git precision-5570-display-wake
+          # renedis (port of Thatisjigen 9c219ee + 45d87ab + d98807e), see b00t0x/WhateverXe#89
+          git cherry-pick a57698f4d6be1baa47a4173c55501c958848fa70 47c08351d2c96a509f67dc280e102d3bf8ea5b0b c3ceea99195d3da3ddf09b8318a0c98fa258f769
+          # Dual internal eDP children (A and B) in the VBT: keep A when its AUX is 0x40
+          python3 - <<'PY'
+          from pathlib import Path
+          f=Path('WhateverXe/kern_vbt.hpp'); s=f.read_text()
+          old='        if(internal!=PortCount)return; // no guessed panel/connector association'
+          new='        if(internal!=PortCount){if(internal==0 && ports.port[0].aux==0x40)continue;return;} // dual eDP A/B: keep A'
+          assert s.count(old)==1
+          f.write_text(s.replace(old,new)); print('vbt patched')
+          PY
+          git log --oneline -5
+      - name: Build DEBUG
+        run: python3 tools/build.py --output build/DEBUG
+      - name: Build RELEASE
+        run: python3 tools/build.py --release --output build/RELEASE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: WhateverXe-0.8.2-edpfix
+          path: |
+            build/DEBUG/WhateverXe.kext
+            build/RELEASE/WhateverXe.kext
